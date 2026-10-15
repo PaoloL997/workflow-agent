@@ -1,0 +1,26 @@
+[project]
+name = "workflow-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Paolo Litta", email = "paolo.litta.br@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "psycopg2>=2.9.13",
+    "pydantic-ai>=2.56.0",
+    "pydantic-ai-harness>=0.56.0",
+]
+
+[project.scripts]
+workflow-agent = "workflow_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.14,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
