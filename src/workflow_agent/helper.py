@@ -28,21 +28,25 @@ def find_revision(client: httpx.Client, document_id: int, rev_no: int) -> dict |
     """
     response = client.get(f"api/documenti/{document_id}/revisioni/")
     if response.status_code == 404:
-        raise NotFound(f"Docuemnto {document_id} non trovato.")
+        raise NotFound(f"Documento {document_id} non trovato.")
     response.raise_for_status()
     for rev in response.json()["revisioni"]:
         if int(rev["rev_no"]) == rev_no:
             return rev
     return None
 
+def list_statuses(client: httpx.Client) -> list[dict]:
+    """Return all the external statuses (StatoEsterno) defined in Workflow."""
+    response = client.get("/api/stati-esterni/")
+    response.raise_for_status()
+    return response.json()["stati"]
+
 def status_by_letter(client: httpx.Client, letter: str) -> dict:
     """Return the external status (StatoEsterno) with the given letter.
 
     Raises NotFound, listing the valid letters, if it does not exist.
     """
-    response = client.get("/api/stati-esterni/")
-    response.raise_for_status()
-    stati = response.json()["stati"]
+    stati = list_statuses(client)
     for s in stati:
         if s["lettera"].upper() == letter.strip().upper():
             return s

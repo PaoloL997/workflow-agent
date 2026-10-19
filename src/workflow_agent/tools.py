@@ -4,6 +4,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from workflow_agent.deps import AgentDeps
 from workflow_agent.helper import (
+    list_statuses,
     status_by_letter,
     find_document,
     NotFound,
@@ -81,7 +82,7 @@ def get_revision(
         raise ModelRetry(str(e))
 
     if rev is None:
-        raise ModelRetry(f"Nessuna revisione {rev_no} per il documento {vendor_doc}"
+        raise ModelRetry(f"Nessuna revisione {rev_no} per il documento {vendor_doc} "
                          f"(ultima revisione registrata: {document['latest_rev_no']})")
     return {
         "id": rev["id"],
@@ -95,6 +96,24 @@ def get_revision(
         "rec_act_date": rev["rec_act_date"],
         "crea_nuova_rev": rev["crea_nuova_rev"],
     }
+
+
+@toolset.tool
+def list_customer_responses(ctx: RunContext[AgentDeps]) -> list[dict]:
+    """Return the customer responses (external statuses) defined in Workflow.
+
+    Call it before change_external_status to map the user's description
+    (e.g. "approvato", "commentato") to a valid letter. crea_nuova_rev says
+    whether that response requires a new revision of the document.
+    """
+    return [
+        {
+            "letter": s["lettera"],
+            "name": s["nome"],
+            "crea_nuova_rev": s["crea_nuova_rev"],
+        }
+        for s in list_statuses(client=ctx.deps.client)
+    ]
 
 
 @toolset.tool(requires_approval=True)
@@ -138,7 +157,7 @@ def change_external_status(
             rev_no=rev_no
         )
         if rev is None:
-            raise ModelRetry(f"Nessuna revisione {rev_no} per il documento {vendor_doc}"
+            raise ModelRetry(f"Nessuna revisione {rev_no} per il documento {vendor_doc} "
                              f"(ultima revisione registrata: {document['latest_rev_no']})")
 
         new_status = status_by_letter(
