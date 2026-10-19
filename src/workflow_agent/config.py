@@ -10,5 +10,6 @@ class Config(BaseSettings):
     workflow_base_url: str
     llm_model: str
     workflow_token: str
+    store_path: str = "conversations.db"
 
 config = Config()
