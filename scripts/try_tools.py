@@ -18,5 +18,6 @@ with httpx.Client(
     #print(get_document(ctx, "22155", "22155-01-QZ03"))
     #print("\nGET REVISION")
     #print(get_revision(ctx, "22155", "22155-01-QZ03", 2))
-    print(get_revision(ctx, "AGENT-TEST", "AGENT-TEST-01-DOC1", 0))
-    
+    #print(get_revision(ctx, "AGENT-TEST", "AGENT-TEST-01-DOC1", 0))
+    print(get_revision(ctx, "AGENT-TEST", "AGENT-TEST-01-DOC5", 0))
+    print(get_revision(ctx, "AGENT-TEST", "AGENT-TEST-01-DOC5", 1))

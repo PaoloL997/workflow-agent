@@ -52,7 +52,7 @@ def get_revision(
     job: str,
     vendor_doc: str,
     rev_no: int
-    ):
+    ) -> dict:
     """Return the current state of a document revision.
 
     Always call it before proposing a change to a revision, so you can show
@@ -90,11 +90,11 @@ def get_revision(
         "rev_no": rev["rev_no"],
         "rev_let": rev["rev_let"],
         "int_status": rev["int_status_eff_label"],
-        "ext_status_lettera": rev["ext_status_lettera"],
+        "ext_status_letter": rev["ext_status_lettera"],
         "ext_status": rev["ext_status_label"],
         "dis_act_date": rev["dis_act_date"],
         "rec_act_date": rev["rec_act_date"],
-        "crea_nuova_rev": rev["crea_nuova_rev"],
+        "creates_next_revision": rev["crea_nuova_rev"],
     }
 
 
@@ -128,8 +128,10 @@ def change_external_status(
 
     Use it when the user says the recorded response is wrong or the customer
     changed it. Workflow also updates the crea_nuova_rev flag and, if needed,
-    deletes or creates the next revision: the "successiva" field in the result
-    says what was done.
+    deletes or creates the next revision. In the result, next_revision_action
+    ("creata", "eliminata", "nessuna") says what was done; when it is "nessuna"
+    and new_status_creates_next_revision is true, the next revision already
+    existed (see next_revision_no).
 
     Before calling it: read the revision with get_revision and fetch the valid
     letters with list_customer_responses. If the user's description matches
@@ -178,10 +180,13 @@ def change_external_status(
     response.raise_for_status()
     
     data = response.json()
+    successiva = data["successiva"]
     return {
         "vendor_doc": vendor_doc,
         "rev_no": rev_no,
         "new_status": new_status["nome"],
-        "successiva": data["successiva"]["azione"],
+        "new_status_creates_next_revision": new_status["crea_nuova_rev"],
+        "next_revision_action": successiva["azione"],
+        "next_revision_no": (successiva["revisione"] or {}).get("rev_no"),
     }
     
