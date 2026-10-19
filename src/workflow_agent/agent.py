@@ -1,11 +1,17 @@
-from pydantic_ai import Agent, DeferredToolRequests 
-# DeferredToolRequest Conversazione terminata perché l'utente deve approvare l'uso di un tool specifico
+from pathlib import Path
 
-from src.workflow_agent.deps import AgentDeps
+from pydantic_ai import Agent, DeferredToolRequests
+
+from workflow_agent.config import config
+from workflow_agent.deps import AgentDeps
+from workflow_agent.tools import toolset
+
+INSTRUCTIONS = (Path(__file__).parent / "instructions.md").read_text(encoding="utf-8")
 
 agent = Agent(
-    model="test",
+    model=config.llm_model,
     deps_type=AgentDeps,
-    instructions="Sei un assistente che aiuta gli utenti dell’app Workflow a consultare e correggere i dati di commesse, documenti e revisioni",
-    output_type=[str, DeferredToolRequests]
+    instructions=INSTRUCTIONS,
+    output_type=[str, DeferredToolRequests],
+    toolsets=[toolset]
 )

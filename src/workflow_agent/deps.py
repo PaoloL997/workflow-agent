@@ -1,9 +1,8 @@
+# Il contenitore di ciò che i tool ricevono a runtime e il modello non vede
 from dataclasses import dataclass
-from typing import Any
-from psycopg2.extensions import connection
-
+import httpx
 
 @dataclass
 class AgentDeps:
-    user: Any
-    db: connection
+    user: str
+    client: httpx.Client

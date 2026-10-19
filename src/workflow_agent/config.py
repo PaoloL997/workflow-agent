@@ -1,12 +1,14 @@
-from pydantic_settings  import BaseSettings, SettingsConfigDict
+# Lettura della configurazione dell'ambiente (.env)
+from dotenv import load_dotenv
 
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")
-    db_host: str
-    db_port: int
-    db_name: str
-    db_user: str
-    db_psw: str
+load_dotenv()
 
-settings = Settings()
+class Config(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    workflow_base_url: str
+    llm_model: str
+    workflow_token: str
+
+config = Config()
