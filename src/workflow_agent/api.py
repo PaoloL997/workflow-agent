@@ -22,6 +22,7 @@ from workflow_agent.config import config
 from workflow_agent.deps import AgentDeps
 from workflow_agent.schemas import ChatRequest, ChatResponse, ConfirmRequest, PendingAction
 from workflow_agent.store.history import ConversationStore
+from workflow_agent.summaries import summarize
 
 app = FastAPI(title="workflow-agent")
 store = ConversationStore(config.store_path)
@@ -50,13 +51,16 @@ def token_from(authorization: str) -> str:
     return token
 
 
-def to_response(conversation_id: str, output: str | DeferredToolRequests) -> ChatResponse:
+def to_response(
+    conversation_id: str, output: str | DeferredToolRequests, client: httpx.Client
+) -> ChatResponse:
     """Translate the outcome of a run into the HTTP response.
 
     A `str` output means the run finished: it goes in `reply`. A
     `DeferredToolRequests` output means the run is paused on write tools: each
     pending call goes in `pending`, with the tool_call_id the widget must send
-    back to /confirm.
+    back to /confirm and a `summary` for the user, read from Workflow with
+    `client`.
     """
     if isinstance(output, DeferredToolRequests):
         return ChatResponse(
@@ -66,6 +70,7 @@ def to_response(conversation_id: str, output: str | DeferredToolRequests) -> Cha
                     tool_call_id=call.tool_call_id,
                     tool_name=call.tool_name,
                     args=call.args_as_dict(),
+                    summary=summarize(call.tool_name, call.args_as_dict(), client),
                 )
                 for call in output.approvals
             ],
@@ -133,8 +138,8 @@ def chat(body: ChatRequest, authorization: str = Header()) -> ChatResponse:
         deps = AgentDeps(user=user, client=client)
         result = agent.run_sync(body.message, deps=deps, message_history=history)
 
-    store.save(conversation_id, result.all_messages())
-    return to_response(conversation_id, result.output)
+        store.save(conversation_id, result.all_messages())
+        return to_response(conversation_id, result.output, client)
 
 
 @app.post("/confirm", response_model=ChatResponse)
@@ -184,5 +189,5 @@ def confirm(body: ConfirmRequest, authorization: str = Header()) -> ChatResponse
             # history with UserError. The check above should catch that first.
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    store.save(body.conversation_id, result.all_messages())
-    return to_response(body.conversation_id, result.output)
+        store.save(body.conversation_id, result.all_messages())
+        return to_response(body.conversation_id, result.output, client)

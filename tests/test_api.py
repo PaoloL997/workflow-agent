@@ -15,6 +15,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from workflow_agent import api
 from workflow_agent.store.history import ConversationStore
+from workflow_agent.summaries import summarize
 
 AUTH = {"Authorization": "Token test-token"}
 
@@ -215,3 +216,82 @@ def test_confirm_maps_user_error_to_400(
 
     assert response.status_code == 400
     assert "bogus" in response.json()["detail"]
+
+
+FALLBACK = (
+    f"change_external_status(job='{JOB}', vendor_doc='{VENDOR_DOC}', rev_no=1, new_letter='A')"
+)
+
+
+def test_chat_pending_has_summary(client: TestClient) -> None:
+    with api.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
+        body = chat(client)
+
+    [pending] = body["pending"]
+    assert pending["tool_call_id"] == "call-1"
+    assert pending["summary"] == (
+        f"Documento {VENDOR_DOC}, rev 1: risposta cliente C (Commentato) → A (Approvato)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("current", "new_letter", "next_exists", "suffix"),
+    [
+        (("A", "Approvato"), "C", False, "; verrà creata la rev 2"),
+        (("A", "Approvato"), "C", True, ""),
+        (("C", "Commentato"), "A", True, "; la rev 2 verrà eliminata se vuota"),
+        (("C", "Commentato"), "A", False, ""),
+    ],
+    ids=["creates-next", "next-already-exists", "deletes-next", "no-next"],
+)
+def test_change_external_status_summary_describes_next_revision(
+    workflow: FakeWorkflow,
+    current: tuple[str, str],
+    new_letter: str,
+    next_exists: bool,
+    suffix: str,
+) -> None:
+    workflow.revisions = [revision(0, "C", "Commentato"), revision(1, *current)]
+    if next_exists:
+        workflow.revisions.append(revision(2, "", ""))
+    new_name = {"A": "Approvato", "C": "Commentato"}[new_letter]
+    args = change_status_call(new_letter=new_letter).args_as_dict()
+
+    with workflow.client() as http:
+        summary = summarize("change_external_status", args, http)
+
+    assert summary == (
+        f"Documento {VENDOR_DOC}, rev 1: risposta cliente {current[0]} ({current[1]})"
+        f" → {new_letter} ({new_name}){suffix}"
+    )
+
+
+def test_summary_of_unknown_tool_falls_back(workflow: FakeWorkflow) -> None:
+    with workflow.client() as http:
+        summary = summarize("archive_document", {"job": JOB, "rev_no": 1}, http)
+
+    assert summary == f"archive_document(job='{JOB}', rev_no=1)"
+    assert workflow.requests == []
+
+
+@pytest.mark.parametrize(
+    ("path", "failure"),
+    [
+        (f"/api/commesse/{JOB}/documenti/", 404),
+        (f"/api/documenti/{DOCUMENT['id']}/revisioni/", 500),
+        ("/api/stati-esterni/", 503),
+        (f"/api/commesse/{JOB}/documenti/", httpx.ReadTimeout("timed out")),
+    ],
+    ids=["job-not-found", "revisions-500", "statuses-503", "timeout"],
+)
+def test_chat_summary_falls_back_when_read_fails(
+    client: TestClient, workflow: FakeWorkflow, path: str, failure: int | Exception
+) -> None:
+    workflow.fail[path] = failure
+    with api.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
+        response = client.post("/chat", json={"message": "La rev 1 è approvata"}, headers=AUTH)
+
+    assert response.status_code == 200
+    [pending] = response.json()["pending"]
+    assert pending["tool_call_id"] == "call-1"
+    assert pending["summary"] == FALLBACK
