@@ -13,7 +13,9 @@ Workflow for the duration of that request only.
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
-from pydantic_ai import DeferredToolRequests, DeferredToolResults
+from fastapi.responses import JSONResponse
+from pydantic_ai import DeferredToolRequests, DeferredToolResults, UserError
+from pydantic_ai.messages import ModelMessage, ModelResponse, RetryPromptPart, ToolReturnPart
 
 from workflow_agent.agent import agent
 from workflow_agent.config import config
@@ -71,6 +73,31 @@ def to_response(conversation_id: str, output: str | DeferredToolRequests) -> Cha
     return ChatResponse(conversation_id=conversation_id, reply=output)
 
 
+def pending_call_ids(history: list[ModelMessage]) -> list[str]:
+    """Return the tool_call_ids a paused run is waiting on, in call order.
+
+    They are the tool calls of the last model response that have no result
+    (ToolReturnPart or RetryPromptPart) in the requests after it: calls run in
+    the same step as the paused ones, such as reads, already have one. This is
+    the set Pydantic AI requires in DeferredToolResults to resume the run. An
+    empty list means the run is not paused.
+    """
+    answered: set[str] = set()
+    for message in reversed(history):
+        if isinstance(message, ModelResponse):
+            return [
+                call.tool_call_id
+                for call in message.tool_calls
+                if call.tool_call_id not in answered
+            ]
+        answered.update(
+            part.tool_call_id
+            for part in message.parts
+            if isinstance(part, ToolReturnPart | RetryPromptPart)
+        )
+    return []
+
+
 def resolve_user(client: httpx.Client) -> str:
     """Ask Workflow who owns the token in `client` (GET /api/agent/me/).
 
@@ -111,12 +138,16 @@ def chat(body: ChatRequest, authorization: str = Header()) -> ChatResponse:
 
 
 @app.post("/confirm", response_model=ChatResponse)
-def confirm(body: ConfirmRequest, authorization: str = Header()) -> ChatResponse:
+def confirm(body: ConfirmRequest, authorization: str = Header()) -> ChatResponse | JSONResponse:
     """Resume a paused run with the user's decisions on the pending actions.
 
     `approvals` maps each tool_call_id to True (execute) or False (reject).
     Which tools run, and with which arguments, comes from the stored history,
     never from the request. The run may pause again with new pending actions.
+
+    The ids in `approvals` must be exactly those of the pending actions: 409
+    if the conversation has none, 400 (with `expected` and `received`) if
+    some are missing or unknown.
     """
     token = token_from(authorization)
 
@@ -127,12 +158,31 @@ def confirm(body: ConfirmRequest, authorization: str = Header()) -> ChatResponse
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
+        expected = pending_call_ids(history)
+        if not expected:
+            raise HTTPException(status_code=409, detail="No pending actions for this conversation")
+        received = list(body.approvals)
+        if set(received) != set(expected):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": "Pending actions do not match",
+                    "expected": expected,
+                    "received": received,
+                },
+            )
+
         deps = AgentDeps(user=user, client=client)
-        result = agent.run_sync(
-            message_history=history,
-            deferred_tool_results=DeferredToolResults(approvals=body.approvals),
-            deps=deps,
-        )
+        try:
+            result = agent.run_sync(
+                message_history=history,
+                deferred_tool_results=DeferredToolResults(approvals=body.approvals),
+                deps=deps,
+            )
+        except UserError as exc:
+            # Safety net: Pydantic AI rejects results that do not match the
+            # history with UserError. The check above should catch that first.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     store.save(body.conversation_id, result.all_messages())
     return to_response(body.conversation_id, result.output)

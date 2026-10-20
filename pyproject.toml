@@ -22,6 +22,9 @@ workflow-agent = "workflow_agent:main"
 requires = ["uv_build>=0.12.14,<0.13.0"]
 build-backend = "uv_build"
 
+[tool.ruff]
+line-length = 100
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
