@@ -23,9 +23,11 @@ from workflow_agent.deps import AgentDeps
 from workflow_agent.schemas import ChatRequest, ChatResponse, ConfirmRequest, PendingAction
 from workflow_agent.conversations import ConversationStore
 from workflow_agent.summaries import summarize
+from workflow_agent.rag.retrieval import ChromaDB
 
 app = FastAPI(title="workflow-agent")
 store = ConversationStore(config.store_path)
+chromadb = ChromaDB()
 
 
 def make_client(token: str) -> httpx.Client:
@@ -135,7 +137,7 @@ def chat(body: ChatRequest, authorization: str = Header()) -> ChatResponse:
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-        deps = AgentDeps(user=user, client=client)
+        deps = AgentDeps(user=user, client=client, chromadb=chromadb)
         result = agent.run_sync(body.message, deps=deps, message_history=history)
 
         store.save(conversation_id, result.all_messages())
@@ -177,7 +179,7 @@ def confirm(body: ConfirmRequest, authorization: str = Header()) -> ChatResponse
                 },
             )
 
-        deps = AgentDeps(user=user, client=client)
+        deps = AgentDeps(user=user, client=client, chromadb=chromadb)
         try:
             result = agent.run_sync(
                 message_history=history,

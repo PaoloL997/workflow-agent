@@ -2,7 +2,10 @@
 from dataclasses import dataclass
 import httpx
 
+from workflow_agent.rag.retrieval import ChromaDB
+
 @dataclass
 class AgentDeps:
     user: str
     client: httpx.Client
+    chromadb: ChromaDB

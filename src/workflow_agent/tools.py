@@ -230,3 +230,18 @@ def undo_submission(ctx: RunContext[AgentDeps], job: str, vendor_doc: str) -> di
         "new_int_status": data["revisione"]["int_status_eff_label"],
         "submission_date_cleared": last_revision["dis_act_date"],
     }
+
+@toolset.tool
+def search_from_manual(ctx: RunContext[AgentDeps], query: str) -> list[dict]:
+    """Search the Workflow user manual for how to do something in the app.
+
+    Use it for questions like "how do I register a customer response?" or
+    "where do I set the revision days?". Answer ONLY from the sections
+    returned, citing their titles. If no section is relevant, say the manual
+    does not cover the topic.
+
+    Args:
+        query: the user's question, rephrased as a short search query in Italian.
+    """
+    return ctx.deps.chromadb.retrieve(query)
+
