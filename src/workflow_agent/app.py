@@ -5,7 +5,7 @@ Two endpoints mirror the two halves of an agent run:
                 pauses with a list of actions awaiting approval.
 - POST /confirm sends the user's decisions on those actions and resumes the run.
 
-Conversation state lives in the conversation store, keyed by conversation_id and owned by
+Conversation state lives in the store, keyed by conversation_id and owned by
 the user resolved from the Workflow token. The token itself is never stored:
 it travels in the Authorization header of every request and is forwarded to
 Workflow for the duration of that request only.
@@ -25,7 +25,7 @@ from workflow_agent.conversations import ConversationStore
 from workflow_agent.summaries import summarize
 
 app = FastAPI(title="workflow-agent")
-store = ConversationStore(config.conversations_path)
+store = ConversationStore(config.store_path)
 
 
 def make_client(token: str) -> httpx.Client:

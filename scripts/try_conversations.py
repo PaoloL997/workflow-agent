@@ -1,5 +1,5 @@
 # scripts/try_conversations.py
-# Prova del ConversationStore: crea, salva una storia vera, ricarica.
+# Prova dello store: crea, salva una storia vera, ricarica.
 
 from unittest.mock import MagicMock
 

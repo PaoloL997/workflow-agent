@@ -9,4 +9,4 @@ import os
 os.environ.setdefault("WORKFLOW_BASE_URL", "http://workflow.test")
 os.environ.setdefault("WORKFLOW_TOKEN", "test-token")
 os.environ.setdefault("LLM_MODEL", "test")
-os.environ.setdefault("CONVERSATIONS_PATH", ":memory:")
+os.environ.setdefault("STORE_PATH", ":memory:")
