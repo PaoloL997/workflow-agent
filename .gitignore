@@ -47,3 +47,8 @@ desktop.ini
 
 # Local SQLite databases (conversation store, tests)
 *.db
+
+# ChromaDB local store
+storage/
+chromadb/
+chroma.sqlite3
