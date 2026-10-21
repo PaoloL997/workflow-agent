@@ -3,7 +3,7 @@ from pydantic_ai import RunContext, ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
 from workflow_agent.deps import AgentDeps
-from workflow_agent.helper import (
+from workflow_agent.workflow_api import (
     list_statuses,
     status_by_letter,
     find_document,

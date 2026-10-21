@@ -13,7 +13,7 @@ from datetime import date
 
 import httpx
 
-from workflow_agent.helper import NotFound, find_document, find_revision, status_by_letter
+from workflow_agent.workflow_api import NotFound, find_document, find_revision, status_by_letter
 
 Summarizer = Callable[[dict, httpx.Client], str]
 

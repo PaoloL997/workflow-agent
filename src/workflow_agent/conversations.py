@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
-SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
+SCHEMA = (Path(__file__).parent / "conversations.sql").read_text(encoding="utf-8")
 
 class ConversationStore:
     def __init__(self, path: str) -> None:

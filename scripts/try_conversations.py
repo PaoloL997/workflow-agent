@@ -1,5 +1,5 @@
-# scripts/try_store.py
-# Prova dello store: crea, salva una storia vera, ricarica.
+# scripts/try_conversations.py
+# Prova del ConversationStore: crea, salva una storia vera, ricarica.
 
 from unittest.mock import MagicMock
 
@@ -7,7 +7,7 @@ from pydantic_ai.models.test import TestModel
 
 from workflow_agent.agent import agent
 from workflow_agent.deps import AgentDeps
-from workflow_agent.store.history import ConversationStore
+from workflow_agent.conversations import ConversationStore
 
 store = ConversationStore("test.db")
 

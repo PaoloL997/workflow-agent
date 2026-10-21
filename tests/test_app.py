@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from workflow_agent import api
-from workflow_agent.store.history import ConversationStore
+from workflow_agent import app as app_module
+from workflow_agent.conversations import ConversationStore
 from workflow_agent.summaries import summarize
 
 AUTH = {"Authorization": "Token test-token"}
@@ -117,7 +117,7 @@ def reply(text: str = "Fatto.") -> ModelResponse:
 @pytest.fixture
 def workflow(monkeypatch: pytest.MonkeyPatch) -> FakeWorkflow:
     fake = FakeWorkflow()
-    monkeypatch.setattr(api, "make_client", lambda token: fake.client())
+    monkeypatch.setattr(app_module, "make_client", lambda token: fake.client())
     return fake
 
 
@@ -126,8 +126,8 @@ def client(
     monkeypatch: pytest.MonkeyPatch, tmp_path, workflow: FakeWorkflow
 ) -> Iterator[TestClient]:
     store = ConversationStore(str(tmp_path / "conversations.db"))
-    monkeypatch.setattr(api, "store", store)
-    yield TestClient(api.app)
+    monkeypatch.setattr(app_module, "store", store)
+    yield TestClient(app_module.app)
     store.conn.close()
 
 
@@ -155,7 +155,7 @@ def confirm(client: TestClient, conversation_id: str, approvals: dict[str, bool]
     ids=["unknown", "extra", "missing"],
 )
 def test_confirm_with_mismatched_ids_returns_400(client: TestClient, approvals: dict) -> None:
-    with api.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
+    with app_module.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
         conversation_id = chat(client)["conversation_id"]
         response = confirm(client, conversation_id, approvals)
 
@@ -168,7 +168,7 @@ def test_confirm_with_mismatched_ids_returns_400(client: TestClient, approvals: 
 
 
 def test_confirm_on_conversation_ended_with_reply_returns_409(client: TestClient) -> None:
-    with api.agent.override(model=scripted(reply("Ciao!"))):
+    with app_module.agent.override(model=scripted(reply("Ciao!"))):
         conversation_id = chat(client, "ciao")["conversation_id"]
         response = confirm(client, conversation_id, {"call-1": True})
 
@@ -177,7 +177,7 @@ def test_confirm_on_conversation_ended_with_reply_returns_409(client: TestClient
 
 
 def test_confirm_on_new_conversation_returns_409(client: TestClient) -> None:
-    conversation_id = api.store.create("paolo")
+    conversation_id = app_module.store.create("paolo")
 
     response = confirm(client, conversation_id, {"call-1": True})
 
@@ -192,7 +192,7 @@ def test_confirm_with_matching_ids_resumes_run(client: TestClient, workflow: Fak
         "get_revision", {"job": JOB, "vendor_doc": VENDOR_DOC, "rev_no": 1}, tool_call_id="read-1"
     )
     model = scripted(ModelResponse(parts=[read, change_status_call()]), reply())
-    with api.agent.override(model=model):
+    with app_module.agent.override(model=model):
         body = chat(client)
         assert [p["tool_call_id"] for p in body["pending"]] == ["call-1"]
 
@@ -210,8 +210,8 @@ def test_confirm_maps_user_error_to_400(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Let a mismatch slip past the check to exercise the safety net.
-    monkeypatch.setattr(api, "pending_call_ids", lambda history: ["bogus"])
-    with api.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
+    monkeypatch.setattr(app_module, "pending_call_ids", lambda history: ["bogus"])
+    with app_module.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
         conversation_id = chat(client)["conversation_id"]
         response = confirm(client, conversation_id, {"bogus": True})
 
@@ -225,7 +225,7 @@ FALLBACK = (
 
 
 def test_chat_pending_has_summary(client: TestClient) -> None:
-    with api.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
+    with app_module.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
         body = chat(client)
 
     [pending] = body["pending"]
@@ -289,7 +289,7 @@ def test_chat_summary_falls_back_when_read_fails(
     client: TestClient, workflow: FakeWorkflow, path: str, failure: int | Exception
 ) -> None:
     workflow.fail[path] = failure
-    with api.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
+    with app_module.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
         response = client.post("/chat", json={"message": "La rev 1 è approvata"}, headers=AUTH)
 
     assert response.status_code == 200

@@ -49,6 +49,5 @@ desktop.ini
 *.db
 
 # ChromaDB local store
-storage/
 chromadb/
 chroma.sqlite3

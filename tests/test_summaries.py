@@ -6,7 +6,7 @@ Workflow is simulated with the same FakeWorkflow used by the API tests.
 import httpx
 import pytest
 
-from tests.test_api import DOCUMENT, JOB, VENDOR_DOC, FakeWorkflow, revision
+from tests.test_app import DOCUMENT, JOB, VENDOR_DOC, FakeWorkflow, revision
 from workflow_agent.summaries import summarize
 
 ARGS = {"job": JOB, "vendor_doc": VENDOR_DOC}

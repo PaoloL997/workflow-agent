@@ -12,7 +12,7 @@ class Config(BaseSettings):
     llm_model: str
     embedding_model: str
     workflow_token: str
-    store_path: str = "conversations.db"
-    chromadb_path: str = "storage"
+    conversations_path: str = "conversations.db"
+    chromadb_path: str = "chromadb"
 
 config = Config()

@@ -1,5 +1,5 @@
-## Store 
-Storico delle conversazioni
+## Conversazioni
+Lo storico delle conversazioni è in `conversations.py` (`ConversationStore`).
 
 Utilizziamo un db sqlite
 id, user, messages (testo JSON), updated_at
