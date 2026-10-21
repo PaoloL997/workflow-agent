@@ -66,3 +66,7 @@ def post_customer_response(
         f"/api/revisioni/{revision_id}/risposta-cliente/",
         json={"ext_status_id": ext_status_id},
     )
+
+def post_undo_submission(client: httpx.Client, revision_id: int):
+    """Call POST /api/revisioni/<id>/annulla-invio/ and return the raw response."""
+    return client.post(f"/api/revisioni/{revision_id}/annulla-invio/")

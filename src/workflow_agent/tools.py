@@ -9,7 +9,8 @@ from workflow_agent.helper import (
     find_document,
     NotFound,
     find_revision,
-    post_customer_response
+    post_customer_response,
+    post_undo_submission
     )
 
 toolset = FunctionToolset()
@@ -189,4 +190,43 @@ def change_external_status(
         "next_revision_action": successiva["azione"],
         "next_revision_no": (successiva["revisione"] or {}).get("rev_no"),
     }
-    
+
+
+@toolset.tool(requires_approval=True)
+def undo_submission(ctx: RunContext[AgentDeps], job: str, vendor_doc: str) -> dict:
+    """Undo the submission to the customer of the LAST revision of a document.
+
+    Use it when the user says a submission was recorded by mistake. The
+    revision goes back to "to be issued" (submission date and planned return
+    date cleared). The transmittal it was issued in, and its files, are left
+    untouched. Only works if the revision was sent and not yet returned by
+    the customer.
+
+    Args:
+        job: job code, e.g. "22155".
+        vendor_doc: internal document number (vendor doc), e.g. "22155-01-QZ03".
+    """
+    try:
+        document = find_document(client=ctx.deps.client, job=job, vendor_doc=vendor_doc)
+        if document is None:
+            raise ModelRetry(f"Nessun documento {vendor_doc} trovato nella commessa {job}")
+        last_rev_num = document["latest_rev_no"]
+        last_revision = find_revision(ctx.deps.client, document["id"], last_rev_num)
+        if last_revision is None:
+            raise ModelRetry(f"Nessuna revisione {last_rev_num} per il documento {vendor_doc}")
+    except NotFound as e:
+        raise ModelRetry(str(e))
+
+    response = post_undo_submission(ctx.deps.client, revision_id=last_revision["id"])
+    if response.status_code in [400, 404, 409]:
+        raise ModelRetry(response.json()["error"])
+    response.raise_for_status()
+
+    data = response.json()
+    return {
+        "vendor_doc": vendor_doc,
+        "rev_no": last_rev_num,
+        "rev_display": document["latest_rev_display"],
+        "new_int_status": data["revisione"]["int_status_eff_label"],
+        "submission_date_cleared": last_revision["dis_act_date"],
+    }

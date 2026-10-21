@@ -28,6 +28,7 @@ DOCUMENT = {
     "client_doc_no": "CL-0001",
     "doc_title": "Piping layout",
     "latest_rev_no": 1,
+    "latest_rev_display": "B",
 }
 STATUSES = [
     {"id": 1, "lettera": "A", "nome": "Approvato", "crea_nuova_rev": False},

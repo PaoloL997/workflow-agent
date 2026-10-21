@@ -44,7 +44,10 @@ su ciascuna azione.
 nuovo letti da Workflow al momento della risposta (`summaries.py`). Per
 `change_external_status` indica anche cosa succede alla revisione successiva
 (`; verrà creata la rev <n+1>` oppure `; la rev <n+1> verrà eliminata se
-vuota`). Per i tool senza un summary dedicato, o se la lettura da Workflow
+vuota`). Per `undo_submission` indica l'ultima revisione del documento e la
+data di invio che verrà cancellata (`Documento 22155-01-QZ03, rev B (inviata il
+01/09/2026): annulla l'invio al cliente; torna "da emettere"`). Per i tool
+senza un summary dedicato, o se la lettura da Workflow
 fallisce, vale `<tool_name>(<chiave>=<valore>, ...)`, ad esempio
 `change_external_status(job='22155', vendor_doc='22155-01-QZ03', rev_no=1, new_letter='A')`.
 

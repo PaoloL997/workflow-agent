@@ -9,6 +9,7 @@ fall back to `<tool_name>(<args>)`: the summary never blocks the response.
 """
 
 from collections.abc import Callable
+from datetime import date
 
 import httpx
 
@@ -86,3 +87,29 @@ def summarize_change_external_status(args: dict, client: httpx.Client) -> str:
     elif not new_status["crea_nuova_rev"] and next_rev is not None:
         summary += f"; la rev {rev_no + 1} verrà eliminata se vuota"
     return summary
+
+
+UNDO_SUBMISSION_EFFECT = ': annulla l\'invio al cliente; torna "da emettere"'
+
+
+@summarizer("undo_submission")
+def summarize_undo_submission(args: dict, client: httpx.Client) -> str:
+    """Which revision loses its submission to the customer, and what happens to it.
+
+    The tool always works on the last revision of the document, so the
+    summary names it (rev_display) and, when known, the submission date that
+    will be cleared.
+    """
+    document = find_document(client, job=args["job"], vendor_doc=args["vendor_doc"])
+    if document is None:
+        raise NotFound(f"Nessun documento {args['vendor_doc']} nella commessa {args['job']}")
+    rev_no = int(document["latest_rev_no"])
+    rev = find_revision(client, document_id=document["id"], rev_no=rev_no)
+    if rev is None:
+        raise NotFound(f"Nessuna revisione {rev_no} per il documento {document['vendor_doc']}")
+
+    summary = f"Documento {document['vendor_doc']}, rev {document['latest_rev_display']}"
+    if rev["dis_act_date"]:
+        sent_on = date.fromisoformat(rev["dis_act_date"]).strftime("%d/%m/%Y")
+        summary += f" (inviata il {sent_on})"
+    return summary + UNDO_SUBMISSION_EFFECT
