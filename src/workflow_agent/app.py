@@ -105,6 +105,18 @@ def pending_call_ids(history: list[ModelMessage]) -> list[str]:
     return []
 
 
+def with_context(message: str, context: dict[str, str] | None) -> str:
+    """Prepend a context line to `message` when the widget says which job is open.
+
+    Only the `job` key is used; other keys are ignored. Without a job the
+    message is returned unchanged.
+    """
+    job = (context or {}).get("job")
+    if not job:
+        return message
+    return f"[Contesto: l'utente sta guardando la commessa {job}]\n\n{message}"
+
+
 def resolve_user(client: httpx.Client) -> str:
     """Ask Workflow who owns the token in `client` (GET /api/agent/me/).
 
@@ -124,8 +136,9 @@ def chat(body: ChatRequest, authorization: str = Header()) -> ChatResponse:
 
     Without `conversation_id` a new conversation is created; with it, the
     stored history is loaded (404 if missing or owned by another user) and
-    the message is appended. The run may end with a reply or pause with
-    pending actions.
+    the message is appended. If `context` names the job the user is looking
+    at, a context line is prepended to the message (see `with_context`). The
+    run may end with a reply or pause with pending actions.
     """
     token = token_from(authorization)
 
@@ -138,7 +151,8 @@ def chat(body: ChatRequest, authorization: str = Header()) -> ChatResponse:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
         deps = AgentDeps(user=user, client=client, chromadb=chromadb)
-        result = agent.run_sync(body.message, deps=deps, message_history=history)
+        message = with_context(body.message, body.context)
+        result = agent.run_sync(message, deps=deps, message_history=history)
 
         store.save(conversation_id, result.all_messages())
         return to_response(conversation_id, result.output, client)

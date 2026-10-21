@@ -10,10 +10,18 @@ from collections.abc import Iterator
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from workflow_agent import app as app_module
+from workflow_agent.app import with_context
 from workflow_agent.conversations import ConversationStore
 from workflow_agent.summaries import summarize
 
@@ -296,3 +304,47 @@ def test_chat_summary_falls_back_when_read_fails(
     [pending] = response.json()["pending"]
     assert pending["tool_call_id"] == "call-1"
     assert pending["summary"] == FALLBACK
+
+
+CONTEXT_LINE = f"[Contesto: l'utente sta guardando la commessa {JOB}]"
+
+
+def first_user_prompt(conversation_id: str) -> str:
+    """The text of the first user message stored for `conversation_id`."""
+    history = app_module.store.load(conversation_id, "paolo")
+    assert history is not None
+    [request] = [m for m in history[:1] if isinstance(m, ModelRequest)]
+    [prompt] = [p for p in request.parts if isinstance(p, UserPromptPart)]
+    assert isinstance(prompt.content, str)
+    return prompt.content
+
+
+@pytest.mark.parametrize(
+    "context", [None, {}, {"altro": "y"}], ids=["none", "empty", "unknown-key"]
+)
+def test_with_context_without_job_leaves_message_unchanged(context: dict | None) -> None:
+    assert with_context("ciao", context) == "ciao"
+
+
+def test_with_context_with_job_prepends_context_line() -> None:
+    assert with_context("ciao", {"job": JOB}) == f"{CONTEXT_LINE}\n\nciao"
+
+
+def test_chat_with_job_context_stores_context_line(client: TestClient) -> None:
+    with app_module.agent.override(model=scripted(reply("Ok."))):
+        response = client.post(
+            "/chat", json={"message": "ciao", "context": {"job": JOB}}, headers=AUTH
+        )
+
+    assert response.status_code == 200
+    assert first_user_prompt(response.json()["conversation_id"]) == f"{CONTEXT_LINE}\n\nciao"
+
+
+def test_chat_with_unknown_context_keys_stores_message_unchanged(client: TestClient) -> None:
+    with app_module.agent.override(model=scripted(reply("Ok."))):
+        response = client.post(
+            "/chat", json={"message": "ciao", "context": {"altro": "y"}}, headers=AUTH
+        )
+
+    assert response.status_code == 200
+    assert first_user_prompt(response.json()["conversation_id"]) == "ciao"

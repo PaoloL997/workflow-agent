@@ -19,6 +19,17 @@ un `conversation_id` inesistente o di un altro utente → `404`.
 {"message": "La rev 1 del 22155-01-QZ03 è approvata", "conversation_id": null}
 ```
 
+`context` (opzionale) dice all'agent cosa sta guardando l'utente nel widget.
+Per ora l'unica chiave riconosciuta è `job`; le altre vengono ignorate. Con
+`context: {"job": "22155"}` il messaggio salvato nella conversazione viene
+preceduto dalla riga `[Contesto: l'utente sta guardando la commessa 22155]` e
+l'agent usa quella commessa senza chiederla, a meno che l'utente ne nomini
+un'altra.
+
+```json
+{"message": "La rev 1 del QZ03 è approvata", "context": {"job": "22155"}}
+```
+
 Risposta (stessa forma per `/confirm`):
 
 ```json

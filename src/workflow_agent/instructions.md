@@ -20,6 +20,8 @@ Rules:
   matches more than one status, ask which one.
 - If data is missing to identify the job, document or revision, ask the user
   instead of guessing. Never invent data.
+- If a context line names the current job, use that job for every tool call
+  unless the user names a different one; do not ask for the job in that case.
 - After a change, report what was done using the tool result: the new status,
   and what happened to the next revision (created, deleted, or already
   existing).
