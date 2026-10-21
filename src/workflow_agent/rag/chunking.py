@@ -2,6 +2,7 @@ from langchain_text_splitters import MarkdownHeaderTextSplitter
 from langchain_core.documents import Document
 
 def split_text(markdown: str) -> list[Document]:
+    """Split the manual by h1-h3 headers; each chunk starts with its "chapter > section" breadcrumb."""
     splitter = MarkdownHeaderTextSplitter(
         headers_to_split_on=[("#", "h1"), ("##", "h2"), ("###", "h3")],
         strip_headers=False,
