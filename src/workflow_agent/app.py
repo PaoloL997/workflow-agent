@@ -14,7 +14,7 @@ Workflow for the duration of that request only.
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic_ai import DeferredToolRequests, DeferredToolResults, UserError
+from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied, UserError
 from pydantic_ai.messages import ModelMessage, ModelResponse, RetryPromptPart, ToolReturnPart
 
 from workflow_agent.agent import agent
@@ -28,6 +28,10 @@ from workflow_agent.rag.retrieval import ChromaDB
 app = FastAPI(title="workflow-agent")
 store = ConversationStore(config.store_path)
 chromadb = ChromaDB()
+
+# Result given to a pending action when the user sends a new message instead
+# of deciding on it (see `chat`).
+SUPERSEDED = ToolDenied("The user sent a new message instead of approving this action.")
 
 
 def make_client(token: str) -> httpx.Client:
@@ -137,7 +141,9 @@ def chat(body: ChatRequest, authorization: str = Header()) -> ChatResponse:
     Without `conversation_id` a new conversation is created; with it, the
     stored history is loaded (404 if missing or owned by another user) and
     the message is appended. If `context` names the job the user is looking
-    at, a context line is prepended to the message (see `with_context`). The
+    at, a context line is prepended to the message (see `with_context`). If
+    the conversation is paused, its pending actions are rejected (nothing is
+    written) and the model gets the rejections together with the message. The
     run may end with a reply or pause with pending actions.
     """
     token = token_from(authorization)
@@ -152,7 +158,16 @@ def chat(body: ChatRequest, authorization: str = Header()) -> ChatResponse:
 
         deps = AgentDeps(user=user, client=client, chromadb=chromadb)
         message = with_context(body.message, body.context)
-        result = agent.run_sync(message, deps=deps, message_history=history)
+        # Pydantic AI refuses a new prompt while tool calls are unanswered.
+        pending = pending_call_ids(history)
+        deferred = (
+            DeferredToolResults(approvals={call_id: SUPERSEDED for call_id in pending})
+            if pending
+            else None
+        )
+        result = agent.run_sync(
+            message, deps=deps, message_history=history, deferred_tool_results=deferred
+        )
 
         store.save(conversation_id, result.all_messages())
         return to_response(conversation_id, result.output, client)

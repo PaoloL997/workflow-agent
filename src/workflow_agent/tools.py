@@ -1,4 +1,7 @@
 
+from datetime import date
+
+import httpx
 from pydantic_ai import RunContext, ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
@@ -9,18 +12,47 @@ from workflow_agent.workflow_api import (
     find_document,
     NotFound,
     find_revision,
+    find_revision_by_label,
+    list_revisions,
     post_customer_response,
-    post_undo_submission
+    post_undo_submission,
+    post_modify_receipt
     )
 
 toolset = FunctionToolset()
+
+
+def resolve_revision(client: httpx.Client, document: dict, revision: str) -> dict:
+    """Return the revision of `document` whose label is `revision`.
+
+    Raises ModelRetry listing the labels of the document's revisions if there
+    is none, so the model can pick an existing one or ask the user.
+    """
+    rev = find_revision_by_label(client, document_id=document["id"], label=revision)
+    if rev is None:
+        labels = ", ".join(r["rev_label"] for r in list_revisions(client, document["id"]))
+        raise ModelRetry(f"Nessuna revisione {revision} per il documento {document['vendor_doc']}. "
+                         f"Revisioni disponibili: {labels or 'nessuna'}.")
+    return rev
+
+def next_revision(client: httpx.Client, document_id: int, rev: dict) -> dict | None:
+    """"The revision after `rev` (rev_no + 1) with its label and status, or None if `rev` is the last."""
+    rev_no = (rev["rev_no"] or 0) + 1
+    successive = [r for r in list_revisions(client, document_id) if r["rev_no"] == rev_no]
+    if not successive:
+        return None
+    # Più righe con lo stesso rev_no (import Access): come Workflow, conta l'ultima.
+    last = successive[-1]
+    return {"revision": last["rev_label"], "int_status": last["int_status_eff_label"]}
+
 
 @toolset.tool
 def get_document(ctx: RunContext[AgentDeps], job: str, vendor_doc: str):
     """Find a document in a job and return its main data.
 
     Use it to check that a document exists and to learn its latest revision
-    before working on revisions.
+    (latest_revision, its label as shown in the app) before working on
+    revisions.
 
     Args:
         job: job code, e.g. "22155".
@@ -44,7 +76,7 @@ def get_document(ctx: RunContext[AgentDeps], job: str, vendor_doc: str):
         "vendor_doc": doc["vendor_doc"],
         "client_doc_no": doc["client_doc_no"],
         "title": doc["doc_title"],
-        "latest_rev_no": doc["latest_rev_no"],
+        "latest_revision": doc["latest_rev_label"],
     }
 
 @toolset.tool
@@ -52,19 +84,19 @@ def get_revision(
     ctx: RunContext[AgentDeps],
     job: str,
     vendor_doc: str,
-    rev_no: int
+    revision: str
     ) -> dict:
     """Return the current state of a document revision.
 
     Always call it before proposing a change to a revision, so you can show
-    the user the current value and the new one.
+    the user the current value and the new one. 
+    Next_revision is the revision after this one (label and internal status),
+    or null if this is the last revision of the document.
 
     Args:
         job: job code, e.g. "22155".
         vendor_doc: internal document number (vendor doc), e.g. "22155-01-QZ03".
-        rev_no: progressive revision number (0 = first issue). If the user
-            gives a letter (e.g. "rev C"), use get_document and get_revision
-            to find the matching number (rev_let).
+        revision: the revision as the user sees it, e.g. "C", "3", "D".
     """
     try:
         document = find_document(
@@ -74,28 +106,21 @@ def get_revision(
         )
         if document is None:
             raise ModelRetry(f"Nessun documento {vendor_doc} trovato nella commessa {job}")
-        rev = find_revision(
-            client=ctx.deps.client,
-            document_id=document["id"],
-            rev_no=rev_no
-            )
+        rev = resolve_revision(ctx.deps.client, document, revision)
+        next_rev = next_revision(ctx.deps.client, document["id"], rev)
     except NotFound as e:
         raise ModelRetry(str(e))
 
-    if rev is None:
-        raise ModelRetry(f"Nessuna revisione {rev_no} per il documento {vendor_doc} "
-                         f"(ultima revisione registrata: {document['latest_rev_no']})")
     return {
         "id": rev["id"],
         "vendor_doc": vendor_doc,
-        "rev_no": rev["rev_no"],
-        "rev_let": rev["rev_let"],
+        "revision": rev["rev_label"],
         "int_status": rev["int_status_eff_label"],
         "ext_status_letter": rev["ext_status_lettera"],
         "ext_status": rev["ext_status_label"],
         "dis_act_date": rev["dis_act_date"],
         "rec_act_date": rev["rec_act_date"],
-        "creates_next_revision": rev["crea_nuova_rev"],
+        "next_revision": next_rev,
     }
 
 
@@ -122,7 +147,7 @@ def change_external_status(
     ctx: RunContext[AgentDeps],
     job: str,
     vendor_doc: str,
-    rev_no: int,
+    revision: str,
     new_letter: str
     ) -> dict:
     """Correct the customer response (ext_status) of ONE revision already returned.
@@ -132,7 +157,7 @@ def change_external_status(
     deletes or creates the next revision. In the result, next_revision_action
     ("creata", "eliminata", "nessuna") says what was done; when it is "nessuna"
     and new_status_creates_next_revision is true, the next revision already
-    existed (see next_revision_no).
+    existed (see next_revision, its label).
 
     Before calling it: read the revision with get_revision and fetch the valid
     letters with list_customer_responses. If the user's description matches
@@ -142,7 +167,7 @@ def change_external_status(
     Args:
         job: job code, e.g. "22155".
         vendor_doc: internal document number (vendor doc), e.g. "22155-01-QZ03".
-        rev_no: progressive number of the revision to correct.
+        revision: the revision to correct as the user sees it, e.g. "C", "3", "D".
         new_letter: letter of the new external status, as returned by
             list_customer_responses (e.g. "A" for Approved).
     """
@@ -154,14 +179,7 @@ def change_external_status(
         )
         if document is None:
             raise ModelRetry(f"Nessun documento {vendor_doc} trovato nella commessa {job}")
-        rev = find_revision(
-            client=ctx.deps.client,
-            document_id=document["id"],
-            rev_no=rev_no
-        )
-        if rev is None:
-            raise ModelRetry(f"Nessuna revisione {rev_no} per il documento {vendor_doc} "
-                             f"(ultima revisione registrata: {document['latest_rev_no']})")
+        rev = resolve_revision(ctx.deps.client, document, revision)
 
         new_status = status_by_letter(
             client=ctx.deps.client,
@@ -184,11 +202,11 @@ def change_external_status(
     successiva = data["successiva"]
     return {
         "vendor_doc": vendor_doc,
-        "rev_no": rev_no,
+        "revision": rev["rev_label"],
         "new_status": new_status["nome"],
         "new_status_creates_next_revision": new_status["crea_nuova_rev"],
         "next_revision_action": successiva["azione"],
-        "next_revision_no": (successiva["revisione"] or {}).get("rev_no"),
+        "next_revision": (successiva["revisione"] or {}).get("rev_label"),
     }
 
 
@@ -210,10 +228,10 @@ def undo_submission(ctx: RunContext[AgentDeps], job: str, vendor_doc: str) -> di
         document = find_document(client=ctx.deps.client, job=job, vendor_doc=vendor_doc)
         if document is None:
             raise ModelRetry(f"Nessun documento {vendor_doc} trovato nella commessa {job}")
-        last_rev_num = document["latest_rev_no"]
-        last_revision = find_revision(ctx.deps.client, document["id"], last_rev_num)
+        last_rev_label = document["latest_rev_label"]
+        last_revision = find_revision(ctx.deps.client, document["id"], document["latest_rev_no"])
         if last_revision is None:
-            raise ModelRetry(f"Nessuna revisione {last_rev_num} per il documento {vendor_doc}")
+            raise ModelRetry(f"Nessuna revisione {last_rev_label} per il documento {vendor_doc}")
     except NotFound as e:
         raise ModelRetry(str(e))
 
@@ -225,8 +243,7 @@ def undo_submission(ctx: RunContext[AgentDeps], job: str, vendor_doc: str) -> di
     data = response.json()
     return {
         "vendor_doc": vendor_doc,
-        "rev_no": last_rev_num,
-        "rev_display": document["latest_rev_display"],
+        "revision": last_rev_label,
         "new_int_status": data["revisione"]["int_status_eff_label"],
         "submission_date_cleared": last_revision["dis_act_date"],
     }
@@ -245,3 +262,57 @@ def search_from_manual(ctx: RunContext[AgentDeps], query: str) -> list[dict]:
     """
     return ctx.deps.chromadb.retrieve(query)
 
+@toolset.tool(requires_approval=True)
+def edit_receipt(
+    ctx: RunContext[AgentDeps],
+    job: str,
+    vendor_doc: str,
+    revision: str,
+    new_date: date | None = None
+    ):
+    """Correct the receipt of ONE revision already returned by the customer.
+
+    Two cases:
+    - new_date given: change the receipt date (e.g. it was recorded with the
+      wrong day).
+    - new_date omitted: undo the receipt, because the document was not
+      actually returned. The revision goes back to "sent to customer", its
+      customer response is cleared, and the next revision created by the
+      receipt is deleted if still empty.
+
+    Before calling it, read the revision with get_revision.
+
+    Args:
+        job: job code, e.g. "22155".
+        vendor_doc: internal document number (vendor doc), e.g. "22155-01-QZ03".
+        revision: the revision as the user sees it, e.g. "C", "3".
+        new_date: the correct receipt date (YYYY-MM-DD). Omit it to undo the receipt.
+    """
+    try:
+        document = find_document(
+            client=ctx.deps.client,
+            job=job,
+            vendor_doc=vendor_doc
+        )
+        if document is None:
+            raise ModelRetry(f"Nessun documento {vendor_doc} trovato nella commessa {job}")
+        rev = resolve_revision(ctx.deps.client, document, revision)
+    except NotFound as e:
+        raise ModelRetry(e)
+    response = post_modify_receipt(ctx.deps.client, rev["id"], new_date)
+    if response.status_code in (400, 404, 409):
+        raise ModelRetry(response.json()["error"])
+    response.raise_for_status()
+
+    data = response.json()
+    updated = data["revisione"]
+    successiva = data["successiva"]
+    return {
+        "vendor_doc": vendor_doc,
+        "revision": updated["rev_label"],
+        "action": "date_changed" if new_date else "receipt_undone",
+        "receipt_date": updated["rec_act_date"],
+        "int_status": updated["int_status_eff_label"],
+        "next_revision_action": successiva["azione"],
+        "next_revision": (successiva["revisione"] or {}).get("rev_label"),
+    }

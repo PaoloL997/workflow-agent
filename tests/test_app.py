@@ -16,6 +16,7 @@ from pydantic_ai.messages import (
     ModelResponse,
     TextPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -36,20 +37,31 @@ DOCUMENT = {
     "client_doc_no": "CL-0001",
     "doc_title": "Piping layout",
     "latest_rev_no": 1,
-    "latest_rev_display": "B",
+    "latest_rev_label": "B",
 }
 STATUSES = [
     {"id": 1, "lettera": "A", "nome": "Approvato", "crea_nuova_rev": False},
     {"id": 3, "lettera": "C", "nome": "Commentato", "crea_nuova_rev": True},
 ]
 
+# Labels of a job with the custom sequence "1,2,3,D", which goes on from its
+# last label (D → E): the revision with rev_no n is labelled SEQUENCE[n], so
+# "3" is rev_no 2 and "D" is rev_no 3.
+SEQUENCE = "123DE"
 
-def revision(rev_no: int, letter: str, label: str) -> dict:
-    """A revision of DOCUMENT as returned by GET api/documenti/<id>/revisioni/."""
+
+def revision(rev_no: int, letter: str, label: str, rev_label: str = "") -> dict:
+    """A revision of DOCUMENT as returned by GET api/documenti/<id>/revisioni/.
+
+    `letter` and `label` are its customer response. `rev_label` is the label
+    the user sees: by default the letter of rev_no (0 → A), as in a job
+    without a custom sequence.
+    """
     return {
         "id": 100 + rev_no,
         "rev_no": rev_no,
-        "rev_let": "ABCD"[rev_no],
+        "rev_let": "ABCDE"[rev_no],
+        "rev_label": rev_label or "ABCDE"[rev_no],
         "int_status_eff_label": "Emesso",
         "ext_status_lettera": letter,
         "ext_status_label": label,
@@ -110,10 +122,12 @@ def scripted(*responses: ModelResponse) -> FunctionModel:
     return FunctionModel(respond)
 
 
-def change_status_call(tool_call_id: str = "call-1", new_letter: str = "A") -> ToolCallPart:
+def change_status_call(
+    tool_call_id: str = "call-1", new_letter: str = "A", revision: str = "B"
+) -> ToolCallPart:
     return ToolCallPart(
         "change_external_status",
-        {"job": JOB, "vendor_doc": VENDOR_DOC, "rev_no": 1, "new_letter": new_letter},
+        {"job": JOB, "vendor_doc": VENDOR_DOC, "revision": revision, "new_letter": new_letter},
         tool_call_id=tool_call_id,
     )
 
@@ -139,7 +153,7 @@ def client(
     store.conn.close()
 
 
-def chat(client: TestClient, message: str = "La rev 1 è approvata") -> dict:
+def chat(client: TestClient, message: str = "La rev B è approvata") -> dict:
     response = client.post("/chat", json={"message": message}, headers=AUTH)
     assert response.status_code == 200
     return response.json()
@@ -197,7 +211,9 @@ def test_confirm_with_matching_ids_resumes_run(client: TestClient, workflow: Fak
     # A read run in the same step as the write already has a result in the
     # history: only the write is pending.
     read = ToolCallPart(
-        "get_revision", {"job": JOB, "vendor_doc": VENDOR_DOC, "rev_no": 1}, tool_call_id="read-1"
+        "get_revision",
+        {"job": JOB, "vendor_doc": VENDOR_DOC, "revision": "B"},
+        tool_call_id="read-1",
     )
     model = scripted(ModelResponse(parts=[read, change_status_call()]), reply())
     with app_module.agent.override(model=model):
@@ -217,18 +233,44 @@ def test_confirm_with_matching_ids_resumes_run(client: TestClient, workflow: Fak
 def test_confirm_maps_user_error_to_400(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Let a mismatch slip past the check to exercise the safety net.
-    monkeypatch.setattr(app_module, "pending_call_ids", lambda history: ["bogus"])
     with app_module.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
         conversation_id = chat(client)["conversation_id"]
+        # Let a mismatch slip past the check to exercise the safety net.
+        monkeypatch.setattr(app_module, "pending_call_ids", lambda history: ["bogus"])
         response = confirm(client, conversation_id, {"bogus": True})
 
     assert response.status_code == 400
     assert "bogus" in response.json()["detail"]
 
 
+def test_chat_on_paused_conversation_rejects_pending(
+    client: TestClient, workflow: FakeWorkflow
+) -> None:
+    model = scripted(ModelResponse(parts=[change_status_call()]), reply("Ok, non la cambio."))
+    with app_module.agent.override(model=model):
+        conversation_id = chat(client)["conversation_id"]
+        response = client.post(
+            "/chat",
+            json={"message": "No, aspetta", "conversation_id": conversation_id},
+            headers=AUTH,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "Ok, non la cambio."
+    assert ("POST", "/api/revisioni/101/risposta-cliente/") not in workflow.requests
+
+    # The rejection and the new message reach the model in the same request.
+    history = app_module.store.load(conversation_id, "paolo")
+    [denial, prompt] = history[-2].parts
+    assert isinstance(denial, ToolReturnPart)
+    assert denial.tool_call_id == "call-1"
+    assert denial.content == app_module.SUPERSEDED.message
+    assert isinstance(prompt, UserPromptPart)
+    assert prompt.content == "No, aspetta"
+
+
 FALLBACK = (
-    f"change_external_status(job='{JOB}', vendor_doc='{VENDOR_DOC}', rev_no=1, new_letter='A')"
+    f"change_external_status(job='{JOB}', vendor_doc='{VENDOR_DOC}', revision='B', new_letter='A')"
 )
 
 
@@ -239,16 +281,16 @@ def test_chat_pending_has_summary(client: TestClient) -> None:
     [pending] = body["pending"]
     assert pending["tool_call_id"] == "call-1"
     assert pending["summary"] == (
-        f"Documento {VENDOR_DOC}, rev 1: risposta cliente C (Commentato) → A (Approvato)"
+        f"Documento {VENDOR_DOC}, rev B: risposta cliente C (Commentato) → A (Approvato)"
     )
 
 
 @pytest.mark.parametrize(
     ("current", "new_letter", "next_exists", "suffix"),
     [
-        (("A", "Approvato"), "C", False, "; verrà creata la rev 2"),
+        (("A", "Approvato"), "C", False, "; verrà creata la revisione successiva"),
         (("A", "Approvato"), "C", True, ""),
-        (("C", "Commentato"), "A", True, "; la rev 2 verrà eliminata se vuota"),
+        (("C", "Commentato"), "A", True, "; la rev C verrà eliminata se vuota"),
         (("C", "Commentato"), "A", False, ""),
     ],
     ids=["creates-next", "next-already-exists", "deletes-next", "no-next"],
@@ -270,8 +312,23 @@ def test_change_external_status_summary_describes_next_revision(
         summary = summarize("change_external_status", args, http)
 
     assert summary == (
-        f"Documento {VENDOR_DOC}, rev 1: risposta cliente {current[0]} ({current[1]})"
+        f"Documento {VENDOR_DOC}, rev B: risposta cliente {current[0]} ({current[1]})"
         f" → {new_letter} ({new_name}){suffix}"
+    )
+
+
+def test_change_external_status_summary_names_revisions_by_label(workflow: FakeWorkflow) -> None:
+    # rev "D" is rev_no 3: the summary must name it, and the next one (rev_no
+    # 4, "E"), by label, never by rev_no.
+    workflow.revisions = [revision(n, "C", "Commentato", SEQUENCE[n]) for n in range(5)]
+    args = change_status_call(revision="D").args_as_dict()
+
+    with workflow.client() as http:
+        summary = summarize("change_external_status", args, http)
+
+    assert summary == (
+        f"Documento {VENDOR_DOC}, rev D: risposta cliente C (Commentato) → A (Approvato)"
+        "; la rev E verrà eliminata se vuota"
     )
 
 
@@ -298,7 +355,7 @@ def test_chat_summary_falls_back_when_read_fails(
 ) -> None:
     workflow.fail[path] = failure
     with app_module.agent.override(model=scripted(ModelResponse(parts=[change_status_call()]))):
-        response = client.post("/chat", json={"message": "La rev 1 è approvata"}, headers=AUTH)
+        response = client.post("/chat", json={"message": "La rev B è approvata"}, headers=AUTH)
 
     assert response.status_code == 200
     [pending] = response.json()["pending"]

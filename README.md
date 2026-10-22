@@ -16,7 +16,7 @@ Invia un messaggio. Senza `conversation_id` crea una nuova conversazione; con
 un `conversation_id` inesistente o di un altro utente → `404`.
 
 ```json
-{"message": "La rev 1 del 22155-01-QZ03 è approvata", "conversation_id": null}
+{"message": "La rev B del 22155-01-QZ03 è approvata", "conversation_id": null}
 ```
 
 `context` (opzionale) dice all'agent cosa sta guardando l'utente nel widget.
@@ -27,7 +27,7 @@ l'agent usa quella commessa senza chiederla, a meno che l'utente ne nomini
 un'altra.
 
 ```json
-{"message": "La rev 1 del QZ03 è approvata", "context": {"job": "22155"}}
+{"message": "La rev B del QZ03 è approvata", "context": {"job": "22155"}}
 ```
 
 Risposta (stessa forma per `/confirm`):
@@ -40,8 +40,8 @@ Risposta (stessa forma per `/confirm`):
     {
       "tool_call_id": "call-1",
       "tool_name": "change_external_status",
-      "args": {"job": "22155", "vendor_doc": "22155-01-QZ03", "rev_no": 1, "new_letter": "A"},
-      "summary": "Documento 22155-01-QZ03, rev 1: risposta cliente C (Commentato) → A (Approvato); la rev 2 verrà eliminata se vuota"
+      "args": {"job": "22155", "vendor_doc": "22155-01-QZ03", "revision": "B", "new_letter": "A"},
+      "summary": "Documento 22155-01-QZ03, rev B: risposta cliente C (Commentato) → A (Approvato); la rev C verrà eliminata se vuota"
     }
   ]
 }
@@ -51,16 +51,25 @@ Se la run è terminata, `reply` contiene la risposta e `pending` è vuoto. Se
 `pending` non è vuoto, la run è in pausa in attesa della decisione dell'utente
 su ciascuna azione.
 
+Se si chiama `/chat` su una conversazione in pausa invece di `/confirm`, le
+azioni in sospeso vengono rifiutate (nessuna scrittura su Workflow) e l'agent
+riceve i rifiuti insieme al nuovo messaggio: può riproporre l'azione se serve.
+
+Le revisioni, negli argomenti e nei risultati dei tool come nei `summary`, sono
+indicate con l'etichetta che l'utente vede nell'app (`rev_label` di Workflow,
+es. "C", "3", "D"), mai con il numero interno `rev_no`: con una sequenza
+personalizzata della commessa i due non coincidono.
+
 `summary` è la frase da mostrare all'utente per l'azione, con valore attuale e
 nuovo letti da Workflow al momento della risposta (`summaries.py`). Per
 `change_external_status` indica anche cosa succede alla revisione successiva
-(`; verrà creata la rev <n+1>` oppure `; la rev <n+1> verrà eliminata se
-vuota`). Per `undo_submission` indica l'ultima revisione del documento e la
+(`; verrà creata la revisione successiva` oppure `; la rev <etichetta> verrà
+eliminata se vuota`). Per `undo_submission` indica l'ultima revisione del documento e la
 data di invio che verrà cancellata (`Documento 22155-01-QZ03, rev B (inviata il
 01/09/2026): annulla l'invio al cliente; torna "da emettere"`). Per i tool
 senza un summary dedicato, o se la lettura da Workflow
 fallisce, vale `<tool_name>(<chiave>=<valore>, ...)`, ad esempio
-`change_external_status(job='22155', vendor_doc='22155-01-QZ03', rev_no=1, new_letter='A')`.
+`change_external_status(job='22155', vendor_doc='22155-01-QZ03', revision='B', new_letter='A')`.
 
 ### `POST /confirm`
 
