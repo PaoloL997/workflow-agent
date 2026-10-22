@@ -121,17 +121,20 @@ def with_context(message: str, context: dict[str, str] | None) -> str:
     return f"[Contesto: l'utente sta guardando la commessa {job}]\n\n{message}"
 
 
-def resolve_user(client: httpx.Client) -> str:
+def resolve_user(client: httpx.Client) -> tuple[str, bool]:
     """Ask Workflow who owns the token in `client` (GET /api/agent/me/).
 
-    Raises HTTP 401 if Workflow rejects the token. This is the only source of
-    the user identity: nothing sent by the widget is trusted for it.
+    Returns the username and whether the user may write in Workflow. Raises
+    HTTP 401 if Workflow rejects the token. This is the only source of the
+    user identity and of the write permission: nothing sent by the widget is
+    trusted for them, and a missing `can_write` is read as no permission.
     """
     response = client.get("/api/agent/me/")
     if response.status_code == 401:
         raise HTTPException(status_code=401, detail="Invalid token")
     response.raise_for_status()
-    return response.json()["username"]
+    me = response.json()
+    return me["username"], bool(me.get("can_write", False))
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -149,14 +152,14 @@ def chat(body: ChatRequest, authorization: str = Header()) -> ChatResponse:
     token = token_from(authorization)
 
     with make_client(token) as client:
-        user = resolve_user(client)
+        user, can_write = resolve_user(client)
 
         conversation_id = body.conversation_id or store.create(user)
         history = store.load(conversation_id, user)
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-        deps = AgentDeps(user=user, client=client, chromadb=chromadb)
+        deps = AgentDeps(user=user, client=client, chromadb=chromadb, can_write=can_write)
         message = with_context(body.message, body.context)
         # Pydantic AI refuses a new prompt while tool calls are unanswered.
         pending = pending_call_ids(history)
@@ -188,7 +191,7 @@ def confirm(body: ConfirmRequest, authorization: str = Header()) -> ChatResponse
     token = token_from(authorization)
 
     with make_client(token) as client:
-        user = resolve_user(client)
+        user, can_write = resolve_user(client)
 
         history = store.load(body.conversation_id, user)
         if history is None:
@@ -208,7 +211,7 @@ def confirm(body: ConfirmRequest, authorization: str = Header()) -> ChatResponse
                 },
             )
 
-        deps = AgentDeps(user=user, client=client, chromadb=chromadb)
+        deps = AgentDeps(user=user, client=client, chromadb=chromadb, can_write=can_write)
         try:
             result = agent.run_sync(
                 message_history=history,

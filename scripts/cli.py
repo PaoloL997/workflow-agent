@@ -40,7 +40,13 @@ def main() -> None:
         headers={"Authorization": f"Token {os.environ['WORKFLOW_TOKEN']}"},
         timeout=30,
     ) as client:
-        deps = AgentDeps(user="paolo", client=client, chromadb=chromadb)
+        me = client.get("/api/agent/me/").raise_for_status().json()
+        deps = AgentDeps(
+            user=me["username"],
+            client=client,
+            chromadb=chromadb,
+            can_write=me["can_write"],
+        )
         history = []
 
         while True:

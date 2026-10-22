@@ -18,7 +18,7 @@ print("altro utente:", store.load(cid, "altro"))  # None
 
 result = agent.run_sync(
     "ciao",
-    deps=AgentDeps(user="plitta", client=MagicMock()),
+    deps=AgentDeps(user="plitta", client=MagicMock(), can_write=True),
     model=TestModel(),
 )
 store.save(cid, result.all_messages())

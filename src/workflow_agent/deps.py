@@ -9,3 +9,6 @@ class AgentDeps:
     user: str
     client: httpx.Client
     chromadb: ChromaDB
+    # Se l'utente ha il permesso di scrittura in Workflow: senza, i tool di
+    # scrittura non vengono nemmeno proposti (vedi agent.writes_allowed).
+    can_write: bool

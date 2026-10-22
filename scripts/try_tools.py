@@ -14,7 +14,7 @@ with httpx.Client(
     headers={"Authorization": f"Token {config.workflow_token}"},
     timeout=10,
 ) as client:
-    ctx = SimpleNamespace(deps=AgentDeps(user="paolo", client=client, chromadb=chromadb))
+    ctx = SimpleNamespace(deps=AgentDeps(user="paolo", client=client, chromadb=chromadb, can_write=True))
     #print("CUSTOMER RESPONSES\n")
     #print(list_customer_responses(ctx))
     #print("\nGET DOCUMENT")

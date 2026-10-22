@@ -21,6 +21,24 @@ from workflow_agent.workflow_api import (
 
 toolset = FunctionToolset()
 
+# Status codes Workflow uses to refuse a write, with the reason in `error`.
+# 403 means no write permission: the write tools are kept away from users
+# without it (see agent.writes_allowed), so it can only show up if the
+# permission is taken away while the run is waiting for the approval.
+REFUSED = (400, 403, 404, 409)
+
+
+def write_result(response: httpx.Response) -> dict:
+    """The JSON body of a write call, or ModelRetry with Workflow's reason.
+
+    So that a refused write is reported to the user instead of breaking the
+    request.
+    """
+    if response.status_code in REFUSED:
+        raise ModelRetry(response.json()["error"])
+    response.raise_for_status()
+    return response.json()
+
 
 def resolve_revision(client: httpx.Client, document: dict, revision: str) -> dict:
     """Return the revision of `document` whose label is `revision`.
@@ -194,11 +212,7 @@ def change_external_status(
         ext_status_id=new_status["id"]
     )
 
-    if response.status_code in [400, 404, 409]:
-        raise ModelRetry(response.json()["error"])
-    response.raise_for_status()
-    
-    data = response.json()
+    data = write_result(response)
     successiva = data["successiva"]
     return {
         "vendor_doc": vendor_doc,
@@ -236,11 +250,7 @@ def undo_submission(ctx: RunContext[AgentDeps], job: str, vendor_doc: str) -> di
         raise ModelRetry(str(e))
 
     response = post_undo_submission(ctx.deps.client, revision_id=last_revision["id"])
-    if response.status_code in [400, 404, 409]:
-        raise ModelRetry(response.json()["error"])
-    response.raise_for_status()
-
-    data = response.json()
+    data = write_result(response)
     return {
         "vendor_doc": vendor_doc,
         "revision": last_rev_label,
@@ -300,11 +310,7 @@ def edit_receipt(
     except NotFound as e:
         raise ModelRetry(e)
     response = post_modify_receipt(ctx.deps.client, rev["id"], new_date)
-    if response.status_code in (400, 404, 409):
-        raise ModelRetry(response.json()["error"])
-    response.raise_for_status()
-
-    data = response.json()
+    data = write_result(response)
     updated = data["revisione"]
     successiva = data["successiva"]
     return {

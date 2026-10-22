@@ -82,3 +82,13 @@ def test_get_revision_of_last_revision_has_no_next(workflow: FakeWorkflow) -> No
         result = get_revision(context(http), JOB, VENDOR_DOC, revision="D")
 
     assert result["next_revision"] is None
+
+def test_change_external_status_reports_a_refused_write(workflow: FakeWorkflow) -> None:
+    # 403 (no write permission) reaches the model as a retry, like 400/404/409,
+    # instead of breaking the request.
+    workflow.fail["/api/revisioni/103/risposta-cliente/"] = 403
+
+    with workflow.client() as http, pytest.raises(ModelRetry) as retry:
+        change_external_status(context(http), JOB, VENDOR_DOC, revision="D", new_letter="A")
+
+    assert retry.value.message == "simulated failure"

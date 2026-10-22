@@ -81,6 +81,7 @@ class FakeWorkflow:
     def __init__(self) -> None:
         self.revisions = [revision(0, "C", "Commentato"), revision(1, "C", "Commentato")]
         self.fail: dict[str, int | Exception] = {}
+        self.can_write = True
         self.requests: list[tuple[str, str]] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -93,7 +94,7 @@ class FakeWorkflow:
             return httpx.Response(failure, json={"error": "simulated failure"})
 
         if path == "/api/agent/me/":
-            return httpx.Response(200, json={"username": "paolo"})
+            return httpx.Response(200, json={"username": "paolo", "can_write": self.can_write})
         if path == f"/api/commesse/{JOB}/documenti/":
             return httpx.Response(200, json={"documenti": [DOCUMENT]})
         if path == f"/api/documenti/{DOCUMENT['id']}/revisioni/":
@@ -405,3 +406,47 @@ def test_chat_with_unknown_context_keys_stores_message_unchanged(client: TestCli
 
     assert response.status_code == 200
     assert first_user_prompt(response.json()["conversation_id"]) == "ciao"
+
+
+WRITE_TOOLS = {"change_external_status", "edit_receipt", "undo_submission"}
+
+
+def offered(answer: ModelResponse) -> tuple[FunctionModel, dict]:
+    """A model that answers `answer` and records what the agent offered it.
+
+    The recorded dict has the names of the tools in `tools` and the
+    instructions of the run in `instructions`.
+    """
+    seen: dict = {}
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen["tools"] = {tool.name for tool in info.function_tools}
+        seen["instructions"] = messages[0].instructions or ""
+        return answer
+
+    return FunctionModel(respond), seen
+
+
+def test_chat_offers_the_write_tools_to_a_user_who_can_write(client: TestClient) -> None:
+    model, seen = offered(reply("Ok."))
+    with app_module.agent.override(model=model):
+        chat(client, "ciao")
+
+    assert WRITE_TOOLS <= seen["tools"]
+    assert "Non hai i permessi" not in seen["instructions"]
+
+
+def test_chat_without_write_permission_hides_the_write_tools(
+    client: TestClient, workflow: FakeWorkflow
+) -> None:
+    # Nothing to approve: the model is told to say that the user cannot write.
+    workflow.can_write = False
+    model, seen = offered(reply("Non hai i permessi per modificare i dati in Workflow."))
+    with app_module.agent.override(model=model):
+        body = chat(client)
+
+    assert seen["tools"] & WRITE_TOOLS == set()
+    assert "get_revision" in seen["tools"]
+    assert "Non hai i permessi per modificare i dati in Workflow" in seen["instructions"]
+    assert body["pending"] == []
+    assert body["reply"] == "Non hai i permessi per modificare i dati in Workflow."

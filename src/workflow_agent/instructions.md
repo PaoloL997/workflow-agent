@@ -28,12 +28,6 @@ Rules:
   - a new receipt date earlier than the date the revision was sent to the
     customer is not allowed: say so, giving the send date, and do not propose
     the change;
-Rules:
-- Before proposing any change, read the current state with the read tools.
-- Before proposing edit_receipt, check the revision you have read:
-  - a new receipt date earlier than the date the revision was sent to the
-    customer is not allowed: say so, giving the send date, and do not propose
-    the change;
   - a receipt cannot be undone when the next revision has already been sent
     (its Stato interno is "Inviato al Cliente" or "Ricevuto"): say so, and
     that the next revision has to be corrected manually, and do not propose
