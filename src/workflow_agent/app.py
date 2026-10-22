@@ -9,6 +9,11 @@ Conversation state lives in the store, keyed by conversation_id and owned by
 the user resolved from the Workflow token. The token itself is never stored:
 it travels in the Authorization header of every request and is forwarded to
 Workflow for the duration of that request only.
+
+Both endpoints are served in a thread each, so requests run in parallel, but
+two requests on the same conversation are serialized (see
+ConversationStore.locked): a run always reads the history the previous one
+saved.
 """
 
 import httpx
@@ -155,24 +160,25 @@ def chat(body: ChatRequest, authorization: str = Header()) -> ChatResponse:
         user, can_write = resolve_user(client)
 
         conversation_id = body.conversation_id or store.create(user)
-        history = store.load(conversation_id, user)
-        if history is None:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        with store.locked(conversation_id):
+            history = store.load(conversation_id, user)
+            if history is None:
+                raise HTTPException(status_code=404, detail="Conversation not found")
 
-        deps = AgentDeps(user=user, client=client, chromadb=chromadb, can_write=can_write)
-        message = with_context(body.message, body.context)
-        # Pydantic AI refuses a new prompt while tool calls are unanswered.
-        pending = pending_call_ids(history)
-        deferred = (
-            DeferredToolResults(approvals={call_id: SUPERSEDED for call_id in pending})
-            if pending
-            else None
-        )
-        result = agent.run_sync(
-            message, deps=deps, message_history=history, deferred_tool_results=deferred
-        )
+            deps = AgentDeps(user=user, client=client, chromadb=chromadb, can_write=can_write)
+            message = with_context(body.message, body.context)
+            # Pydantic AI refuses a new prompt while tool calls are unanswered.
+            pending = pending_call_ids(history)
+            deferred = (
+                DeferredToolResults(approvals={call_id: SUPERSEDED for call_id in pending})
+                if pending
+                else None
+            )
+            result = agent.run_sync(
+                message, deps=deps, message_history=history, deferred_tool_results=deferred
+            )
 
-        store.save(conversation_id, result.all_messages())
+            store.save(conversation_id, result.all_messages())
         return to_response(conversation_id, result.output, client)
 
 
@@ -193,35 +199,38 @@ def confirm(body: ConfirmRequest, authorization: str = Header()) -> ChatResponse
     with make_client(token) as client:
         user, can_write = resolve_user(client)
 
-        history = store.load(body.conversation_id, user)
-        if history is None:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        with store.locked(body.conversation_id):
+            history = store.load(body.conversation_id, user)
+            if history is None:
+                raise HTTPException(status_code=404, detail="Conversation not found")
 
-        expected = pending_call_ids(history)
-        if not expected:
-            raise HTTPException(status_code=409, detail="No pending actions for this conversation")
-        received = list(body.approvals)
-        if set(received) != set(expected):
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "detail": "Pending actions do not match",
-                    "expected": expected,
-                    "received": received,
-                },
-            )
+            expected = pending_call_ids(history)
+            if not expected:
+                raise HTTPException(
+                    status_code=409, detail="No pending actions for this conversation"
+                )
+            received = list(body.approvals)
+            if set(received) != set(expected):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": "Pending actions do not match",
+                        "expected": expected,
+                        "received": received,
+                    },
+                )
 
-        deps = AgentDeps(user=user, client=client, chromadb=chromadb, can_write=can_write)
-        try:
-            result = agent.run_sync(
-                message_history=history,
-                deferred_tool_results=DeferredToolResults(approvals=body.approvals),
-                deps=deps,
-            )
-        except UserError as exc:
-            # Safety net: Pydantic AI rejects results that do not match the
-            # history with UserError. The check above should catch that first.
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            deps = AgentDeps(user=user, client=client, chromadb=chromadb, can_write=can_write)
+            try:
+                result = agent.run_sync(
+                    message_history=history,
+                    deferred_tool_results=DeferredToolResults(approvals=body.approvals),
+                    deps=deps,
+                )
+            except UserError as exc:
+                # Safety net: Pydantic AI rejects results that do not match the
+                # history with UserError. The check above should catch that first.
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        store.save(body.conversation_id, result.all_messages())
+            store.save(body.conversation_id, result.all_messages())
         return to_response(body.conversation_id, result.output, client)

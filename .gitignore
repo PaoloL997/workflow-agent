@@ -45,8 +45,10 @@ logs/
 Thumbs.db
 desktop.ini
 
-# Local SQLite databases (conversation store, tests)
+# Local SQLite databases (conversation store, tests), with their WAL sidecars
 *.db
+*.db-wal
+*.db-shm
 
 # ChromaDB local store
 storage/

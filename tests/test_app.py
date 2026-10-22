@@ -5,6 +5,8 @@ a FunctionModel that returns a scripted list of responses, and the store is a
 SQLite file under tmp_path.
 """
 
+import threading
+import time
 from collections.abc import Iterator
 
 import httpx
@@ -450,3 +452,85 @@ def test_chat_without_write_permission_hides_the_write_tools(
     assert "Non hai i permessi per modificare i dati in Workflow" in seen["instructions"]
     assert body["pending"] == []
     assert body["reply"] == "Non hai i permessi per modificare i dati in Workflow."
+
+
+HOLD = 0.2
+
+
+def hold(
+    store: ConversationStore,
+    conversation_id: str,
+    tag: str,
+    events: list[str],
+    entered: threading.Event | None = None,
+) -> None:
+    """Take the conversation's lock and keep it for HOLD, recording the stay."""
+    with store.locked(conversation_id):
+        events.append(f"in-{tag}")
+        if entered is not None:
+            entered.set()
+        time.sleep(HOLD)
+        events.append(f"out-{tag}")
+
+
+def test_locked_serializes_two_requests_on_the_same_conversation(tmp_path) -> None:
+    store = ConversationStore(str(tmp_path / "conversations.db"))
+    conversation_id = store.create("paolo")
+    events: list[str] = []
+
+    threads = [
+        threading.Thread(target=hold, args=(store, conversation_id, tag, events))
+        for tag in ("a", "b")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    store.conn.close()
+
+    # Whoever goes first, the two stays do not overlap.
+    assert [event.split("-")[0] for event in events] == ["in", "out", "in", "out"]
+
+
+def test_locked_does_not_hold_up_another_conversation(tmp_path) -> None:
+    store = ConversationStore(str(tmp_path / "conversations.db"))
+    first = store.create("paolo")
+    second = store.create("paolo")
+    events: list[str] = []
+
+    entered = threading.Event()
+    waiting = threading.Thread(target=hold, args=(store, first, "a", events, entered))
+    waiting.start()
+    assert entered.wait(timeout=5)
+    with store.locked(second):
+        events.append("other")
+    waiting.join()
+    store.conn.close()
+
+    # The other conversation got in while the first one was still held.
+    assert events == ["in-a", "other", "out-a"]
+
+
+def locks_taken(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the conversations whose lock the endpoints take."""
+    taken: list[str] = []
+    locked = app_module.store.locked
+
+    def recording(conversation_id: str):
+        taken.append(conversation_id)
+        return locked(conversation_id)
+
+    monkeypatch.setattr(app_module.store, "locked", recording)
+    return taken
+
+
+def test_chat_and_confirm_hold_the_conversation(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    taken = locks_taken(monkeypatch)
+    model = scripted(ModelResponse(parts=[change_status_call()]), reply())
+    with app_module.agent.override(model=model):
+        conversation_id = chat(client)["conversation_id"]
+        confirm(client, conversation_id, {"call-1": True})
+
+    assert taken == [conversation_id, conversation_id]
