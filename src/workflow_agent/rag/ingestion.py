@@ -13,6 +13,10 @@ from workflow_agent.rag.embedding import ef
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "manual"
+# Ollama embeds a whole upsert in a single HTTP request: with bge-m3 on CPU
+# (~0.7s per chunk) the full manual blows past the embedding timeout, so the
+# chunks go in a few at a time.
+BATCH_SIZE = 16
 
 
 class IngestionPipeline:
@@ -53,32 +57,48 @@ class IngestionPipeline:
             },
         )
         logger.info(
-            "Upserting %d chunks into collection '%s' (embedding with %s)",
-            len(chunks), COLLECTION_NAME, self.embedding_model,
+            "Upserting %d chunks into collection '%s' in batches of %d (embedding with %s)",
+            len(chunks), COLLECTION_NAME, BATCH_SIZE, self.embedding_model,
         )
         start = time.perf_counter()
-        collection.upsert(
-            ids=[f"chunk-{i}" for i in range(len(chunks))],
-            documents=[c.page_content for c in chunks],
-            metadatas=[c.metadata for c in chunks],
-        )
+        for i in range(0, len(chunks), BATCH_SIZE):
+            batch = chunks[i:i + BATCH_SIZE]
+            collection.upsert(
+                ids=[f"chunk-{i + j}" for j in range(len(batch))],
+                documents=[c.page_content for c in batch],
+                metadatas=[c.metadata for c in batch],
+            )
+            logger.info(
+                "Embedded %d/%d chunks (%.1fs elapsed)",
+                i + len(batch), len(chunks), time.perf_counter() - start,
+            )
         logger.info("Upsert done in %.1fs, documents in collection: %d", time.perf_counter() - start, collection.count())
         return collection
 
-    def _is_up_to_date(self, remote_version: str) -> bool:
-        """True if the local collection already holds `remote_version`; drops a stale one."""
+    def _is_up_to_date(self, remote_version: str, expected_chunks: int) -> bool:
+        """True if the local collection holds `remote_version` in full; drops a stale or partial one."""
         if not any(c.name == COLLECTION_NAME for c in self.db_client.list_collections()):
             logger.info("Collection '%s' not found: ingestion needed.", COLLECTION_NAME)
             return False
         collection = self.db_client.get_collection(COLLECTION_NAME)
         local_version = collection.metadata.get("version")
-        if local_version == remote_version:
-            logger.info("Collection '%s' already at version %s (%d documents).", COLLECTION_NAME, local_version, collection.count())
+        local_count = collection.count()
+        if local_version == remote_version and local_count == expected_chunks:
+            logger.info("Collection '%s' already at version %s (%d documents).", COLLECTION_NAME, local_version, local_count)
             return True
-        logger.info(
-            "Collection '%s' at version %s, remote is %s: deleting it for re-ingestion.",
-            COLLECTION_NAME, local_version, remote_version,
-        )
+        if local_version == remote_version:
+            # The version is written when the collection is created, before the
+            # chunks land, so a run interrupted mid-upsert leaves it tagged but
+            # incomplete: re-ingest instead of trusting the tag.
+            logger.info(
+                "Collection '%s' at version %s holds %d of %d chunks (interrupted ingestion): deleting it for re-ingestion.",
+                COLLECTION_NAME, local_version, local_count, expected_chunks,
+            )
+        else:
+            logger.info(
+                "Collection '%s' at version %s, remote is %s: deleting it for re-ingestion.",
+                COLLECTION_NAME, local_version, remote_version,
+            )
         self.db_client.delete_collection(COLLECTION_NAME)
         return False
 
@@ -87,10 +107,10 @@ class IngestionPipeline:
         start = time.perf_counter()
         remote = self.get_from_remote()
         version = remote["version"]
-        if self._is_up_to_date(version):
-            logger.info("Ingestion skipped.")
-            return
         chunks = split_text(remote["content"])
         logger.info("Text split into %d chunks", len(chunks))
+        if self._is_up_to_date(version, len(chunks)):
+            logger.info("Ingestion skipped.")
+            return
         self.add(chunks, version)
         logger.info("Ingestion of version %s completed in %.1fs", version, time.perf_counter() - start)
